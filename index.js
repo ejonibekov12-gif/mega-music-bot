@@ -1,59 +1,49 @@
 
 import { Bot, InlineKeyboard, InputFile } from "grammy";
 
-const TOKEN = process.env.BOT_TOKEN;
-const CHANNEL = "@ShunchakiMusiqaUz";
-const REQUIRED_CHANNEL = "@ShunchakiMusiqaUz";
-const JAMENDO_ID = process.env.JAMENDO_CLIENT_ID;
+const TOKEN =
+  process.env.BOT_TOKEN ||
+  process.env.TELEGRAM_BOT_TOKEN;
 
-if (!TOKEN || !JAMENDO_ID) {
-  throw new Error("BOT_TOKEN yoki JAMENDO_CLIENT_ID topilmadi!");
-}
+const CHANNEL = "@ShunchakiMusiqaUz";
+const API = "https://api.freetouse.com/v3";
+
+if (!TOKEN) throw new Error("BOT_TOKEN topilmadi!");
 
 const bot = new Bot(TOKEN);
-const results = new Map();
+const searches = new Map();
 
-const subscribeKeyboard = new InlineKeyboard()
+const subKeyboard = new InlineKeyboard()
   .url("📢 Kanalga obuna bo'lish", "https://t.me/ShunchakiMusiqaUz")
   .row()
   .text("✅ Obunani tekshirish", "check_sub");
 
-async function isSubscribed(userId) {
+async function subscribed(id) {
   try {
-    const member = await bot.api.getChatMember(
-      REQUIRED_CHANNEL,
-      userId
-    );
-    return ["member", "administrator", "creator"]
-      .includes(member.status);
+    const m = await bot.api.getChatMember(CHANNEL, id);
+    return ["member", "administrator", "creator"].includes(m.status);
   } catch {
     return false;
   }
 }
 
 bot.command("start", async (ctx) => {
-  const ok = await isSubscribed(ctx.from.id);
-
-  if (!ok) {
+  if (!(await subscribed(ctx.from.id))) {
     return ctx.reply(
-      "🎵 MEGA MUSIC BOT\n\nDavom etish uchun kanalga obuna bo'ling!",
-      { reply_markup: subscribeKeyboard }
+      "🎧 MEGA MUSIC BOT\n\nBotdan foydalanish uchun kanalga obuna bo'ling!",
+      { reply_markup: subKeyboard }
     );
   }
 
   await ctx.reply(
-    "🎧 MEGA MUSIC BOT\n\nQo'shiq nomini yozing, men qidirib beraman!"
+    "🎵 MEGA MUSIC BOT\n\nQo'shiq nomini yozing va qidirishni boshlang!"
   );
 });
 
 bot.callbackQuery("check_sub", async (ctx) => {
-  const ok = await isSubscribed(ctx.from.id);
-
-  if (ok) {
-    await ctx.answerCallbackQuery({
-      text: "Obuna tasdiqlandi! ✅"
-    });
-    await ctx.reply("🎵 Qo'shiq nomini yuboring!");
+  if (await subscribed(ctx.from.id)) {
+    await ctx.answerCallbackQuery("Obuna tasdiqlandi! ✅");
+    await ctx.reply("🎵 Endi qo'shiq nomini yuboring!");
   } else {
     await ctx.answerCallbackQuery({
       text: "Avval kanalga obuna bo'ling!",
@@ -67,47 +57,42 @@ bot.on("message:text", async (ctx) => {
 
   if (query.startsWith("/")) return;
 
-  if (!(await isSubscribed(ctx.from.id))) {
-    return ctx.reply(
-      "Avval kanalga obuna bo'ling!",
-      { reply_markup: subscribeKeyboard }
-    );
+  if (!(await subscribed(ctx.from.id))) {
+    return ctx.reply("Avval kanalga obuna bo'ling!", {
+      reply_markup: subKeyboard
+    });
   }
 
   await ctx.reply("🔎 Musiqa qidirilmoqda...");
 
   try {
-    const url = new URL(
-      "https://api.jamendo.com/v3.0/tracks/"
-    );
-
-    url.searchParams.set("client_id", JAMENDO_ID);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("search", query);
-    url.searchParams.set("limit", "5");
-    url.searchParams.set("audioformat", "mp32");
-    url.searchParams.set("audiodlformat", "mp32");
-    url.searchParams.set("include", "licenses");
+    const url = new URL(`${API}/music/tracks/search`);
+    url.searchParams.set("query", query);
+    url.searchParams.set("limit", "8");
+    url.searchParams.set("order", "plays");
+    url.searchParams.set("sort", "desc");
 
     const response = await fetch(url);
-    const data = await response.json();
+    if (!response.ok) throw new Error("API javob bermadi");
 
-    const tracks = (data.results || []).filter(
-      track => track.audiodownload_allowed &&
-               track.audiodownload
+    const json = await response.json();
+
+    const tracks = (json.data || []).filter(
+      t => !t.is_premium && t.files?.mp3
     );
 
     if (!tracks.length) {
-      return ctx.reply("😔 Yuklab olishga ruxsat berilgan musiqa topilmadi.");
+      return ctx.reply("😔 Mos bepul musiqa topilmadi.");
     }
 
-    results.set(ctx.from.id, tracks);
+    searches.set(ctx.from.id, tracks);
 
     const keyboard = new InlineKeyboard();
 
-    tracks.forEach((track, i) => {
+    tracks.forEach((t, i) => {
+      const artist = t.artists?.map(a => a[1]?.name).filter(Boolean).join(", ");
       keyboard.text(
-        `🎵 ${track.name} — ${track.artist_name}`,
+        `🎵 ${t.title} — ${artist || "Noma'lum"}`.slice(0, 60),
         `track_${i}`
       ).row();
     });
@@ -116,17 +101,14 @@ bot.on("message:text", async (ctx) => {
       reply_markup: keyboard
     });
 
-  } catch (error) {
-    console.error(error);
-    await ctx.reply("❌ Qidirishda xatolik yuz berdi.");
+  } catch (e) {
+    console.error(e);
+    await ctx.reply("❌ Qidirishda xatolik. Keyinroq urinib ko'ring.");
   }
 });
 
-bot.on("callback_query:data", async (ctx) => {
-  const match = ctx.callbackQuery.data.match(/^track_(\d+)$/);
-  if (!match) return;
-
-  if (!(await isSubscribed(ctx.from.id))) {
+bot.callbackQuery(/^track_(\d+)$/, async (ctx) => {
+  if (!(await subscribed(ctx.from.id))) {
     await ctx.answerCallbackQuery({
       text: "Avval kanalga obuna bo'ling!",
       show_alert: true
@@ -134,77 +116,74 @@ bot.on("callback_query:data", async (ctx) => {
     return;
   }
 
-  const tracks = results.get(ctx.from.id);
-  const track = tracks?.[Number(match[1])];
+  const tracks = searches.get(ctx.from.id);
+  const track = tracks?.[Number(ctx.match[1])];
 
   if (!track) {
-    return ctx.answerCallbackQuery({
-      text: "Musiqa topilmadi."
-    });
+    return ctx.answerCallbackQuery("Musiqa topilmadi!");
   }
 
   await ctx.answerCallbackQuery("Yuklanmoqda...");
   await ctx.reply("📥 MP3 tayyorlanmoqda...");
 
   try {
-    const download = await fetch(track.audiodownload);
+    const response = await fetch(track.files.mp3);
+    if (!response.ok) throw new Error("Audio yuklanmadi");
 
-    if (!download.ok) {
-      throw new Error("Download failed");
+    const length = Number(response.headers.get("content-length") || 0);
+    if (length > 49 * 1024 * 1024) {
+      throw new Error("Fayl juda katta");
     }
 
-    const size = Number(download.headers.get("content-length") || 0);
+    const buffer = Buffer.from(await response.arrayBuffer());
 
-    if (size > 48 * 1024 * 1024) {
-      throw new Error("Audio file too large");
+    if (!buffer.length || buffer.length > 49 * 1024 * 1024) {
+      throw new Error("Audio hajmi mos emas");
     }
 
-    const buffer = Buffer.from(await download.arrayBuffer());
+    const artist = track.artists
+      ?.map(a => a[1]?.name)
+      .filter(Boolean)
+      .join(", ") || "Noma'lum";
 
-    if (buffer.length > 48 * 1024 * 1024) {
-      throw new Error("Audio file too large");
-    }
-
-    const audio = new InputFile(
-      buffer,
-      `${track.name}.mp3`
-    );
+    const filename =
+      (track.title || "music").replace(/[^\w.-]/g, "_") + ".mp3";
 
     const caption =
       `🎧 SHUNCHAKI MUSIQA UZ\n\n` +
-      `🎵 Nomi: ${track.name}\n` +
-      `🎤 Ijrochi: ${track.artist_name}\n` +
-      `🔗 Manba: Jamendo\n` +
+      `🎵 Nomi: ${track.title}\n` +
+      `🎤 Ijrochi: ${artist}\n` +
+      `🎶 Manba: Free To Use\n` +
       `📢 @ShunchakiMusiqaUz`;
 
-    await bot.api.sendAudio(CHANNEL, audio, {
-      title: track.name,
-      performer: track.artist_name,
-      caption
-    });
-
-    await ctx.reply("✅ Musiqa kanalingizga joylandi!");
-
-    await ctx.replyWithAudio(
-      new InputFile(buffer, `${track.name}.mp3`),
+    // Avval kanalga joylash
+    await bot.api.sendAudio(
+      CHANNEL,
+      new InputFile(buffer, filename),
       {
-        title: track.name,
-        performer: track.artist_name
+        title: track.title,
+        performer: artist,
+        caption
       }
     );
 
-  } catch (error) {
-    console.error(error);
-    await ctx.reply(
-      "❌ Musiqani yuklashda xatolik yuz berdi."
+    // Keyin foydalanuvchiga yuborish
+    await ctx.replyWithAudio(
+      new InputFile(buffer, filename),
+      {
+        title: track.title,
+        performer: artist,
+        caption: "✅ Musiqa kanalingizga joylandi!"
+      }
     );
+
+  } catch (e) {
+    console.error(e);
+    await ctx.reply("❌ Yuklash yoki kanalga joylashda xatolik yuz berdi.");
   }
 });
 
-bot.catch((error) => {
-  console.error("Bot xatosi:", error);
-});
+bot.catch(err => console.error("Bot xatosi:", err));
 
 bot.start();
 console.log("MEGA MUSIC BOT ishga tushdi!");
-
